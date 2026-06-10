@@ -1,0 +1,85 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            arch: amd64
+            binary: kiro-notifications-linux-amd64
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+            binary: kiro-notifications-linux-arm64
+          - os: macos-latest
+            platform: darwin
+            arch: arm64
+            binary: kiro-notifications-darwin-arm64
+          - os: macos-13
+            platform: darwin
+            arch: amd64
+            binary: kiro-notifications-darwin-amd64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+
+      - name: Build
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=0 go build -ldflags="-s -w" -trimpath -o dist/${{ matrix.binary }} ./cmd/kiro-notifications
+
+      - name: Test binary
+        run: ./dist/${{ matrix.binary }} version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.binary }}
+          path: dist/${{ matrix.binary }}
+          retention-days: 1
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist-artifacts
+
+      - name: Organize files
+        run: |
+          mkdir -p dist
+          find dist-artifacts -type f -exec cp {} dist/ \;
+          cp -r sounds dist/
+          cp config/config.json dist/
+          cp install.sh dist/
+          cd dist && sha256sum kiro-notifications-* > checksums.txt
+          cat checksums.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

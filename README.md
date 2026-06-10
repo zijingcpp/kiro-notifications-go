@@ -18,6 +18,24 @@ Fork from [claude-notifications-go](https://github.com/777genius/claude-notifica
 
 ## 安装
 
+### 方式 1：下载预编译二进制（推荐）
+
+从 [Releases](https://github.com/zijingcpp/kiro-notifications-go/releases) 下载对应平台的二进制文件：
+
+```bash
+# Linux amd64
+curl -fsSL https://github.com/zijingcpp/kiro-notifications-go/releases/latest/download/kiro-notifications-linux-amd64 -o ~/.local/bin/kiro-notifications
+chmod +x ~/.local/bin/kiro-notifications
+
+# macOS arm64 (Apple Silicon)
+curl -fsSL https://github.com/zijingcpp/kiro-notifications-go/releases/latest/download/kiro-notifications-darwin-arm64 -o ~/.local/bin/kiro-notifications
+chmod +x ~/.local/bin/kiro-notifications
+```
+
+然后手动配置 Kiro agent hook（见下方「配置」部分），或下载 install.sh 自动配置。
+
+### 方式 2：从源码编译
+
 ```bash
 git clone git@github.com:zijingcpp/kiro-notifications-go.git
 cd kiro-notifications-go
