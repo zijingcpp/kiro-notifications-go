@@ -1,97 +1,89 @@
+// Package jsonl parses Kiro CLI session JSONL transcript files.
+// Kiro session format: {"version":"v1","kind":"...","data":{...}}
+// Kinds: Prompt, AssistantMessage, ToolResults
 package jsonl
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
-	"io"
 	"os"
 	"time"
 )
 
-// Message represents a Claude Code transcript message
+// --- Raw wire types ---
+
+type rawLine struct {
+	Version string          `json:"version"`
+	Kind    string          `json:"kind"`
+	Data    json.RawMessage `json:"data"`
+}
+
+type rawPromptData struct {
+	MessageID string `json:"message_id"`
+	Content   []struct {
+		Kind string `json:"kind"`
+		Data string `json:"data"`
+	} `json:"content"`
+	Meta struct {
+		Timestamp int64 `json:"timestamp"`
+	} `json:"meta"`
+}
+
+type rawAssistantData struct {
+	MessageID string `json:"message_id"`
+	Content   []struct {
+		Kind string          `json:"kind"`
+		Data json.RawMessage `json:"data"`
+	} `json:"content"`
+}
+
+type rawToolUseData struct {
+	ToolUseID string          `json:"toolUseId"`
+	Name      string          `json:"name"`
+	Input     json.RawMessage `json:"input"`
+}
+
+type rawToolResultsData struct {
+	MessageID string `json:"message_id"`
+	Content   []struct {
+		Kind string `json:"kind"`
+		Data struct {
+			ToolUseID string `json:"toolUseId"`
+			Status    string `json:"status"`
+			Content   []struct {
+				Kind string          `json:"kind"`
+				Data json.RawMessage `json:"data"`
+			} `json:"content"`
+		} `json:"data"`
+	} `json:"content"`
+}
+
+// --- Public types ---
+
+// ToolUse represents a tool invocation in an assistant message.
+type ToolUse struct {
+	Name string
+}
+
+// Message represents a parsed Kiro session message.
 type Message struct {
-	ParentUUID        string         `json:"parentUuid"`
-	Type              string         `json:"type"`
-	Message           MessageContent `json:"message"`
-	Timestamp         string         `json:"timestamp"`
-	IsApiErrorMessage bool           `json:"isApiErrorMessage,omitempty"`
-	Error             string         `json:"error,omitempty"`
+	Kind      string    // "Prompt", "AssistantMessage", "ToolResults"
+	MessageID string
+	Timestamp time.Time
+
+	// For Prompt
+	UserText string
+
+	// For AssistantMessage
+	AssistantText string
+	Tools         []ToolUse
+
+	// For ToolResults
+	ToolStatuses []string // "success" | "error" per tool result
 }
 
-// MessageContent represents the content of a message
-// Content can be either a string (user text messages) or an array (tool results, assistant messages)
-type MessageContent struct {
-	Role          string    `json:"role"`
-	Content       []Content `json:"-"` // Array content (tool_result, assistant messages)
-	ContentString string    `json:"-"` // String content (user text messages)
-}
-
-// Content represents a content block in a message
-type Content struct {
-	Type  string                 `json:"type"`
-	Name  string                 `json:"name,omitempty"`
-	Text  string                 `json:"text,omitempty"`
-	Input map[string]interface{} `json:"input,omitempty"`
-}
-
-// UnmarshalJSON implements custom JSON unmarshaling for MessageContent
-// Handles both string content (user text messages) and array content (tool results, assistant messages)
-func (m *MessageContent) UnmarshalJSON(data []byte) error {
-	// Create an alias to avoid recursion
-	type Alias MessageContent
-	aux := &struct {
-		Content json.RawMessage `json:"content"`
-		*Alias
-	}{
-		Alias: (*Alias)(m),
-	}
-
-	// Unmarshal everything except content
-	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
-	}
-
-	// Try to unmarshal content as a string (user text messages)
-	var str string
-	if err := json.Unmarshal(aux.Content, &str); err == nil {
-		m.ContentString = str
-		return nil
-	}
-
-	// Try to unmarshal content as an array (tool results, assistant messages)
-	var arr []Content
-	if err := json.Unmarshal(aux.Content, &arr); err == nil {
-		m.Content = arr
-		return nil
-	}
-
-	// Content is neither string nor array (or is null/empty), that's okay
-	return nil
-}
-
-// MarshalJSON implements custom JSON marshaling for MessageContent
-// Outputs content as string if ContentString is set, otherwise as array
-func (m MessageContent) MarshalJSON() ([]byte, error) {
-	// Create auxiliary struct with content as interface{}
-	aux := &struct {
-		Role    string      `json:"role"`
-		Content interface{} `json:"content,omitempty"`
-	}{
-		Role: m.Role,
-	}
-
-	// Choose content format based on which field is set
-	if m.ContentString != "" {
-		aux.Content = m.ContentString
-	} else if len(m.Content) > 0 {
-		aux.Content = m.Content
-	}
-
-	return json.Marshal(aux)
-}
-
-// ParseFile parses a JSONL file and returns all messages
+// ParseFile parses a Kiro session JSONL file and returns all messages.
+// Malformed lines are silently skipped.
 func ParseFile(path string) ([]Message, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -99,307 +91,120 @@ func ParseFile(path string) ([]Message, error) {
 	}
 	defer f.Close()
 
-	return Parse(f)
+	var msgs []Message
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 4*1024*1024), 4*1024*1024)
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var raw rawLine
+		if err := json.Unmarshal(line, &raw); err != nil {
+			continue
+		}
+		msg, ok := parseLine(raw)
+		if ok {
+			msgs = append(msgs, msg)
+		}
+	}
+	return msgs, scanner.Err()
 }
 
-// Parse parses JSONL from a reader and returns all messages.
-// Uses bufio.Reader instead of bufio.Scanner to handle arbitrarily long lines
-// (e.g. base64-encoded images, large code diffs in Claude Code transcripts).
-func Parse(r io.Reader) ([]Message, error) {
-	var messages []Message
-	reader := bufio.NewReaderSize(r, 64*1024) // 64KB initial buffer
+func parseLine(raw rawLine) (Message, bool) {
+	switch raw.Kind {
+	case "Prompt":
+		var d rawPromptData
+		if err := json.Unmarshal(raw.Data, &d); err != nil {
+			return Message{}, false
+		}
+		msg := Message{Kind: "Prompt", MessageID: d.MessageID}
+		msg.Timestamp = time.Unix(d.Meta.Timestamp, 0)
+		for _, c := range d.Content {
+			if c.Kind == "text" {
+				msg.UserText += c.Data
+			}
+		}
+		return msg, true
 
-	for {
-		line, err := reader.ReadBytes('\n')
-		// Process line even if err != nil (last line may lack trailing newline)
-		line = bytes.TrimRight(line, "\r\n")
-		if len(line) > 0 {
-			var msg Message
-			if jsonErr := json.Unmarshal(line, &msg); jsonErr == nil {
-				messages = append(messages, msg)
-			}
-			// Skip invalid JSON lines instead of failing
+	case "AssistantMessage":
+		var d rawAssistantData
+		if err := json.Unmarshal(raw.Data, &d); err != nil {
+			return Message{}, false
 		}
-		if err != nil {
-			if err == io.EOF {
-				break
+		msg := Message{Kind: "AssistantMessage", MessageID: d.MessageID}
+		for _, c := range d.Content {
+			switch c.Kind {
+			case "text":
+				var s string
+				if err := json.Unmarshal(c.Data, &s); err == nil {
+					msg.AssistantText += s
+				}
+			case "toolUse":
+				var tu rawToolUseData
+				if err := json.Unmarshal(c.Data, &tu); err == nil && tu.Name != "" {
+					msg.Tools = append(msg.Tools, ToolUse{Name: tu.Name})
+				}
 			}
-			return nil, err
 		}
+		return msg, true
+
+	case "ToolResults":
+		var d rawToolResultsData
+		if err := json.Unmarshal(raw.Data, &d); err != nil {
+			return Message{}, false
+		}
+		msg := Message{Kind: "ToolResults", MessageID: d.MessageID}
+		for _, c := range d.Content {
+			if c.Kind == "toolResult" {
+				msg.ToolStatuses = append(msg.ToolStatuses, c.Data.Status)
+			}
+		}
+		return msg, true
 	}
-
-	return messages, nil
+	return Message{}, false
 }
 
-// GetLastApiErrorMessages returns the last N messages with isApiErrorMessage=true
-func GetLastApiErrorMessages(messages []Message, count int) []Message {
-	var errorMessages []Message
-	for _, msg := range messages {
-		if msg.IsApiErrorMessage {
-			errorMessages = append(errorMessages, msg)
+// ExtractAllTools returns all tool names used across all AssistantMessages.
+func ExtractAllTools(msgs []Message) []string {
+	var tools []string
+	for _, m := range msgs {
+		if m.Kind != "AssistantMessage" {
+			continue
+		}
+		for _, t := range m.Tools {
+			tools = append(tools, t.Name)
 		}
 	}
-
-	if len(errorMessages) <= count {
-		return errorMessages
-	}
-	return errorMessages[len(errorMessages)-count:]
-}
-
-// HasRecentApiError checks if there are API error messages after the last user message
-func HasRecentApiError(messages []Message) bool {
-	lastUserTS := GetLastUserTimestamp(messages)
-
-	for i := len(messages) - 1; i >= 0; i-- {
-		msg := messages[i]
-		if msg.IsApiErrorMessage {
-			// If no user timestamp, any API error counts
-			if lastUserTS == "" {
-				return true
-			}
-			// Check if error is after last user message
-			if msg.Timestamp >= lastUserTS {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// GetLastAssistantMessages returns the last N assistant messages
-func GetLastAssistantMessages(messages []Message, count int) []Message {
-	var assistantMessages []Message
-	for _, msg := range messages {
-		if msg.Type == "assistant" {
-			assistantMessages = append(assistantMessages, msg)
-		}
-	}
-
-	// Return last N messages
-	if len(assistantMessages) <= count {
-		return assistantMessages
-	}
-	return assistantMessages[len(assistantMessages)-count:]
-}
-
-// ExtractTools extracts all tools from messages with their positions
-func ExtractTools(messages []Message) []ToolUse {
-	var tools []ToolUse
-
-	for pos, msg := range messages {
-		for _, content := range msg.Message.Content {
-			if content.Type == "tool_use" {
-				tools = append(tools, ToolUse{
-					Position: pos,
-					Name:     content.Name,
-				})
-			}
-		}
-	}
-
 	return tools
 }
 
-// ToolUse represents a tool use with its position
-type ToolUse struct {
-	Position int
-	Name     string
-}
-
-// GetLastTool returns the last tool used, or empty string if none
-func GetLastTool(tools []ToolUse) string {
-	if len(tools) == 0 {
-		return ""
-	}
-	return tools[len(tools)-1].Name
-}
-
-// CountToolsAfterPosition counts how many tools were used after a given position
-func CountToolsAfterPosition(tools []ToolUse, position int) int {
-	count := 0
-	for _, tool := range tools {
-		if tool.Position > position {
-			count++
+// LastAssistantMessages returns up to n most recent AssistantMessages.
+func LastAssistantMessages(msgs []Message, n int) []Message {
+	var assistant []Message
+	for _, m := range msgs {
+		if m.Kind == "AssistantMessage" {
+			assistant = append(assistant, m)
 		}
 	}
-	return count
-}
-
-// FindToolPosition finds the position of a tool by name (last occurrence)
-// Returns -1 if not found
-func FindToolPosition(tools []ToolUse, name string) int {
-	position := -1
-	for _, tool := range tools {
-		if tool.Name == name {
-			position = tool.Position
-		}
+	if len(assistant) <= n {
+		return assistant
 	}
-	return position
+	return assistant[len(assistant)-n:]
 }
 
-// ExtractTextFromMessages extracts all text content from messages
-func ExtractTextFromMessages(messages []Message) []string {
-	var texts []string
-
-	for _, msg := range messages {
-		for _, content := range msg.Message.Content {
-			if content.Type == "text" && content.Text != "" {
-				texts = append(texts, content.Text)
-			}
-		}
-	}
-
-	return texts
-}
-
-// FindLastToolUse finds the last occurrence of a specific tool use in messages
-// Returns nil if not found
-func FindLastToolUse(messages []Message, toolName string) *Content {
-	var lastTool *Content
-
-	for _, msg := range messages {
-		if msg.Type != "assistant" {
+// HasToolError returns true if any ToolResults entry has a non-success status.
+func HasToolError(msgs []Message) bool {
+	for _, m := range msgs {
+		if m.Kind != "ToolResults" {
 			continue
 		}
-		for i := range msg.Message.Content {
-			if msg.Message.Content[i].Type == "tool_use" && msg.Message.Content[i].Name == toolName {
-				lastTool = &msg.Message.Content[i]
-			}
-		}
-	}
-
-	return lastTool
-}
-
-// ExtractToolInput extracts the input parameters from a specific tool use
-// Returns empty map if tool not found
-func ExtractToolInput(messages []Message, toolName string) map[string]interface{} {
-	tool := FindLastToolUse(messages, toolName)
-	if tool == nil {
-		return make(map[string]interface{})
-	}
-	return tool.Input
-}
-
-// GetLastUserTimestamp returns the timestamp of the last user message with text content
-// Includes both string content (normal user messages) and array content with type="text" (interrupted tool use)
-// Excludes tool_result messages
-func GetLastUserTimestamp(messages []Message) string {
-	for i := len(messages) - 1; i >= 0; i-- {
-		msg := messages[i]
-		if msg.Type == "user" {
-			// Check for string content (normal user text messages)
-			if msg.Message.ContentString != "" {
-				return msg.Timestamp
-			}
-			// Check for array content with type="text" (interrupted tool use: "[Request interrupted by user for tool use]")
-			if len(msg.Message.Content) > 0 && msg.Message.Content[0].Type == "text" {
-				return msg.Timestamp
-			}
-		}
-	}
-	return ""
-}
-
-// GetLastAssistantTimestamp returns the timestamp of the last assistant message
-func GetLastAssistantTimestamp(messages []Message) string {
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Type == "assistant" {
-			return messages[i].Timestamp
-		}
-	}
-	return ""
-}
-
-// FilterMessagesAfterTimestamp filters messages that occurred after given timestamp
-// Returns only assistant messages after the timestamp
-// This is used to filter messages to only those in the current response (after last user message)
-func FilterMessagesAfterTimestamp(messages []Message, afterTimestamp string) []Message {
-	if afterTimestamp == "" {
-		// No user message - return all assistant messages
-		return filterAssistantMessages(messages)
-	}
-
-	// Parse the timestamp
-	afterTime, err := time.Parse(time.RFC3339, afterTimestamp)
-	if err != nil {
-		// Invalid timestamp - return all assistant messages
-		return filterAssistantMessages(messages)
-	}
-
-	var filtered []Message
-	for _, msg := range messages {
-		if msg.Type != "assistant" {
-			continue
-		}
-
-		if msg.Timestamp == "" {
-			continue
-		}
-
-		msgTime, err := time.Parse(time.RFC3339, msg.Timestamp)
-		if err != nil {
-			continue
-		}
-
-		// Include only messages AFTER user message
-		if msgTime.After(afterTime) {
-			filtered = append(filtered, msg)
-		}
-	}
-
-	return filtered
-}
-
-// filterAssistantMessages returns only assistant messages from the list
-func filterAssistantMessages(messages []Message) []Message {
-	var filtered []Message
-	for _, msg := range messages {
-		if msg.Type == "assistant" {
-			filtered = append(filtered, msg)
-		}
-	}
-	return filtered
-}
-
-// CountToolsByNames counts tools matching any of the given names
-func CountToolsByNames(tools []ToolUse, names []string) int {
-	count := 0
-	for _, tool := range tools {
-		for _, name := range names {
-			if tool.Name == name {
-				count++
-			}
-		}
-	}
-	return count
-}
-
-// HasAnyActiveTool checks if any active tool was used
-func HasAnyActiveTool(tools []ToolUse, activeTools []string) bool {
-	for _, tool := range tools {
-		for _, active := range activeTools {
-			if tool.Name == active {
+		for _, s := range m.ToolStatuses {
+			if s != "success" {
 				return true
 			}
 		}
 	}
 	return false
-}
-
-// ExtractRecentText extracts concatenated text from last N assistant messages
-func ExtractRecentText(messages []Message, count int) string {
-	recentMessages := GetLastAssistantMessages(messages, count)
-	texts := ExtractTextFromMessages(recentMessages)
-
-	// Join all texts with spaces
-	var result string
-	for i, text := range texts {
-		if i > 0 {
-			result += " "
-		}
-		result += text
-	}
-
-	return result
 }

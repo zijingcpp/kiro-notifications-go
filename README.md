@@ -1,449 +1,140 @@
-<h1 align="center">Claude Notifications (plugin)</h1>
+# kiro-notifications-go
 
-[![Ubuntu CI](https://github.com/777genius/claude-notifications-go/workflows/Ubuntu%20CI/badge.svg)](https://github.com/777genius/claude-notifications-go/actions)
-[![macOS CI](https://github.com/777genius/claude-notifications-go/workflows/macOS%20CI/badge.svg)](https://github.com/777genius/claude-notifications-go/actions)
-[![Windows CI](https://github.com/777genius/claude-notifications-go/workflows/Windows%20CI/badge.svg)](https://github.com/777genius/claude-notifications-go/actions)
-[![Go Report Card](https://goreportcard.com/badge/github.com/777genius/claude-notifications-go)](https://goreportcard.com/report/github.com/777genius/claude-notifications-go)
-[![codecov](https://codecov.io/gh/777genius/claude-notifications-go/branch/main/graph/badge.svg)](https://codecov.io/gh/777genius/claude-notifications-go)
+Kiro CLI 任务完成后自动发送桌面通知 + 声音提醒。支持 macOS 和 Linux。
 
-<div>
-<table>
-  <tr>
-    <td align="center"><img width="250" height="350" alt="image" src="https://github.com/user-attachments/assets/e7aa6d8e-5d28-48f7-bafe-ad696857b938" /></td>
-    <td align="center"><img width="350" alt="image" src="https://i.imgur.com/Nrt6dEo.png" /></td>
-    <td align="center"><img width="220" alt="image" src="https://github.com/user-attachments/assets/4b5929d8-1a51-4a15-a3d5-dda5482554cc" /></td>
-  </tr>
-</table>
-</div>
+Fork from [claude-notifications-go](https://github.com/777genius/claude-notifications-go)，适配 Kiro CLI hook 系统。
 
-Smart notifications for Claude Code with click-to-focus, git branch display, and webhook integrations.
+## 效果预览
 
-> **Boost your productivity** — check out the [advanced task manager for Claude with a convenient UI](https://github.com/777genius/claude_agent_teams_ui), from the creator of this plugin.
+![通知效果](notify_test.png)
 
-## Table of Contents
+## 功能
 
-  - [Features](#features)
-  - [Installation](#installation)
-    - [Prerequisites](#prerequisites)
-    - [Quick Install (Recommended)](#quick-install-recommended)
-    - [Manual Install](#manual-install)
-    - [Updating](#updating)
-  - [Supported Notification Types](#supported-notification-types)
-  - [Platform Support](#platform-support)
-    - [Click-to-Focus (macOS & Linux)](#click-to-focus-macos--linux)
-  - [Configuration](#configuration)
-    - [Manual Configuration](#manual-configuration)
-    - [Sound Options](#sound-options)
-    - [Test Sound Playback](#test-sound-playback)
-  - [Manual Testing](#manual-testing)
-  - [Contributing](#contributing)
-  - [Troubleshooting](#troubleshooting)
-  - [Documentation](#documentation)
-  - [License](#license)
+- ✅ 任务完成通知（区分类型：完成 / 提问 / 审查 / 错误）
+- 🔊 不同状态播放不同声音
+- 🔔 桌面通知（macOS / Linux 跨平台）
+- 🌐 Webhook 推送（Lark / Slack / Discord / 自定义）
+- 🧠 自动解析 Kiro session JSONL 判断任务状态
 
-## Features
-
-- **Cross-platform**: macOS (Intel & Apple Silicon), Linux (x64 & ARM64), Windows 10+ (x64)
-- **6 notification types**: Task Complete, Review Complete, Question, Plan Ready, Session Limit, API Error
-- **Click-to-focus** (macOS, Linux): click notification to focus the exact project window and tab — Ghostty, VS Code, iTerm2, Warp, kitty, WezTerm, Alacritty, Hyper, Apple Terminal, GNOME Terminal, Konsole, Tilix, Terminator, XFCE4 Terminal, MATE Terminal
-- **Multiplexers**: tmux (including iTerm2 -CC integration mode), zellij, WezTerm, kitty — click switches to the correct session/pane/tab
-- **Git branch in title**: `✅ Completed main [cat]`
-- **Sounds**: MP3/WAV/FLAC/OGG/AIFF, volume control, audio device selection
-- **Webhooks**: Slack, Discord, Telegram, Lark/Feishu, Microsoft Teams, ntfy.sh, PagerDuty, Zapier, n8n, Make, custom — with retry, circuit breaker, rate limiting ([docs](docs/webhooks/README.md))
-- **[Plugin compatibility](docs/PLUGIN_COMPATIBILITY.md)**: works with [double-shot-latte](https://github.com/obra/double-shot-latte) and other plugins that spawn background Claude instances
-
-## Installation
-
-### Prerequisites
-
-- Claude Code
-- **Windows users:** Git Bash (included with [Git for Windows](https://git-scm.com/download/win)) or WSL
-- **macOS/Linux users:** No additional software required
-
-### Quick Install (Recommended)
-
-One command to install everything:
+## 安装
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/777genius/claude-notifications-go/main/bin/bootstrap.sh | bash
+git clone git@github.com:zijingcpp/kiro-notifications-go.git
+cd kiro-notifications-go
+./install.sh
 ```
 
-Then restart Claude Code and optionally run `/claude-notifications-go:settings` to configure sounds.
+安装脚本会：
+1. 编译二进制到 `~/.local/bin/kiro-notifications`
+2. 复制声音文件和配置到 `~/.local/share/kiro-notifications/`
+3. 在 `~/.kiro/agents/default.json` 中添加 `stop` hook
 
-The binary is downloaded once and cached locally. You can re-run `/claude-notifications-go:settings` anytime to reconfigure.
+安装完成后重启 Kiro（新开 `kiro chat`）即可生效。
 
-> If the bootstrap script doesn't work for your environment, use the [Manual Install](#manual-install) steps below inside Claude Code.
+### 依赖
 
-### Manual Install
+- Go 1.21+（编译）
+- Linux: `libnotify-bin`（notify-send）、音频播放器（mpv / ffplay / gst-play-1.0 任一）
+- macOS: 无额外依赖
 
-<details>
-<summary>Step-by-step installation inside Claude Code (if bootstrap doesn't work)</summary>
+## 工作原理
 
-Run these slash commands in the Claude Code chat, not in your system terminal:
-
-```text
-# 1) Add marketplace
-/plugin marketplace add 777genius/claude-notifications-go
-# 2) Install plugin
-/plugin install claude-notifications-go@claude-notifications-go
-# 3) Restart Claude Code
-# 4) Download binary
-/claude-notifications-go:init
-# 5) (Optional) Configure sounds and settings
-/claude-notifications-go:settings
+```
+Kiro 任务结束 → stop hook 触发
+    ↓
+kiro-notifications handle-hook stop
+    ↓
+查找最新 ~/.kiro/sessions/cli/*.jsonl
+    ↓
+解析 session → 分析状态（task_complete / question / review_complete / error）
+    ↓
+桌面通知 + 声音 + webhook
 ```
 
-</details>
+### 状态判断逻辑
 
-> Having issues with installation? See [Troubleshooting](#troubleshooting).
+| 状态 | 条件 |
+|------|------|
+| `task_complete` | 使用了 write / shell / use_aws 等 active tool |
+| `question` | 最后一条 assistant 消息以 `?` 结尾 |
+| `review_complete` | 仅使用 read / grep / glob 等 passive tool，且回复 >200 字符 |
+| `error` | ToolResults 中出现非 success 状态 |
 
-### Updating
+## 配置
 
-Run the same command as for installation — it will update both the plugin and the binary:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/777genius/claude-notifications-go/main/bin/bootstrap.sh | bash
-```
-
-Then restart Claude Code to apply the new version. Your settings in `~/.claude/claude-notifications-go/config.json` are preserved across updates.
-
-<details>
-<summary>Manual update (if bootstrap didn't work)</summary>
-
-Claude Code also periodically checks for plugin updates automatically. Binaries are updated on the next hook invocation when a version mismatch is detected.
-
-To update manually via Claude Code UI:
-
-1. Run `/plugin`, select **Marketplaces**, choose `claude-notifications-go`, then select **Update marketplace**
-2. Select **Installed**, choose `claude-notifications-go`, then select **Update now**
-
-If the binary auto-update didn't work (e.g. no internet at the time), run `/claude-notifications-go:init` to download it manually. If hook definitions changed in the new version, restart Claude Code to apply them.
-
-</details>
-
-## Supported Notification Types
-
-| Status | Icon | Description | Trigger |
-|--------|------|-------------|---------|
-| Task Complete | ✅ | Main task completed | Stop/SubagentStop hooks (state machine detects active tools like Write/Edit/Bash, or ExitPlanMode followed by tool usage) |
-| Review Complete | 🔍 | Code review finished | Stop/SubagentStop hooks (state machine detects only read-like tools: Read/Grep/Glob with no active tools, plus long text response >200 chars) |
-| Question | ❓ | Claude has a question | PreToolUse hook (AskUserQuestion) OR Notification hook |
-| Plan Ready | 📋 | Plan ready for approval | PreToolUse hook (ExitPlanMode) |
-| Session Limit Reached | ⏱️ | Session limit reached | Stop/SubagentStop hooks (state machine detects "Session limit reached" text in last 3 assistant messages) |
-| API Error | 🔴 | Authentication expired, rate limit, server error, connection error | Stop/SubagentStop hooks (state machine detects via `isApiErrorMessage` flag + `error` field from JSONL) |
-
-## Platform Support
-
-**Supported platforms:**
-- macOS (Intel & Apple Silicon)
-- Linux (x64 & ARM64)
-- Windows 10+ (x64)
-
-**No additional dependencies:**
-- ✅ Binaries auto-download from GitHub Releases
-- ✅ Pure Go - no C compiler needed
-- ✅ All libraries bundled
-- ✅ Works offline after first setup
-
-**Windows-specific features:**
-- Native Toast notifications (Windows 10+)
-- Works in PowerShell, CMD, Git Bash, or WSL
-- MP3/WAV/OGG/FLAC audio playback via native Windows APIs
-- System sounds not accessible - use built-in MP3s or custom files
-
-### Click-to-Focus (macOS & Linux)
-
-Clicking a notification activates your terminal window. Auto-detects terminal and platform.
-
-**macOS** — via AX API with bundle ID detection:
-
-| Terminal | Focus method |
-|----------|-------------|
-| Ghostty | Exact tab focus via Ghostty AppleScript, with AXDocument fallback |
-| VS Code / Insiders / Cursor | AXTitle (focus-window subcommand) |
-| iTerm2 | Exact tab/pane targeting via iTerm2 Python API when available, otherwise app-level iTerm activation |
-| Warp, kitty, WezTerm, Alacritty, Hyper, Apple Terminal | AXTitle (focus-window subcommand) |
-| Any other (custom `terminalBundleId`) | AXTitle (focus-window subcommand) |
-
-**Linux** — via D-Bus daemon with automatic compositor detection:
-
-| Terminal | Supported compositors |
-|----------|----------------------|
-| VS Code | GNOME, KDE, Sway, X11 |
-| GNOME Terminal, Konsole, Alacritty, kitty, WezTerm, Tilix, Terminator, XFCE4 Terminal, MATE Terminal | GNOME, KDE, Sway, X11 |
-| Any other | Fallback by name |
-
-Linux focus methods (tried in order): GNOME extension, GNOME Shell Eval, GNOME FocusApp, wlrctl (Sway/wlroots), kdotool (KDE), xdotool (X11).
-
-**Multiplexers** (both platforms): tmux (including iTerm2 -CC integration mode), zellij, WezTerm, kitty — click switches to the correct pane/tab.
-
-**iTerm2 note:** to open the exact iTerm2 tab or split pane, enable `iTerm2 > Settings > General > Magic > Enable Python API`. If you just toggled it, restart iTerm2 once. Without the Python API, the plugin falls back to app-level iTerm activation instead of exact tab targeting.
-
-**Windows** — notifications only, no click-to-focus.
-
-See **[Click-to-Focus Guide](docs/CLICK_TO_FOCUS.md)** for configuration details.
-
-## Configuration
-
-Run `/claude-notifications-go:settings` to configure sounds, volume, webhooks, and other options via an interactive wizard. You can re-run it anytime to reconfigure.
-
-### Manual Configuration
-
-Config file location:
-
-| Platform | Path |
-|----------|------|
-| macOS / Linux | `~/.claude/claude-notifications-go/config.json` |
-| Windows (Git Bash) | `~/.claude/claude-notifications-go/config.json` |
-| Windows (PowerShell) | `$env:USERPROFILE\.claude\claude-notifications-go\config.json` |
-
-Edit the config file directly:
+配置文件位于 `~/.local/share/kiro-notifications/config/config.json`：
 
 ```json
 {
-  "notifications": {
-    "desktop": {
-      "enabled": true,
-      "sound": true,
-      "volume": 1.0,
-      "audioDevice": "",
-      "clickToFocus": true,
-      "terminalBundleId": "",
-      "appIcon": "${CLAUDE_PLUGIN_ROOT}/claude_icon.png"
-    },
-    "webhook": {
-      "enabled": false,
-      "preset": "slack",
-      "url": "",
-      "chat_id": "",
-      "format": "json",
-      "headers": {},
-      "payloadFields": {}
-    },
-    "suppressQuestionAfterTaskCompleteSeconds": 12,
-    "suppressQuestionAfterAnyNotificationSeconds": 7,
-    "notifyOnSubagentStop": false,
-    "notifyOnTextResponse": true,
-    "respectJudgeMode": true,
-    "suppressFilters": [
-      {
-        "name": "Suppress ClaudeProbe completions (remote-control)",
-        "status": "task_complete",
-        "gitBranch": "",
-        "folder": "ClaudeProbe"
-      }
-    ]
+  "desktop": {
+    "enabled": true,
+    "sound": true
   },
-  "statuses": {
-    "task_complete": {
-      "title": "✅ Completed",
-      "sound": "${CLAUDE_PLUGIN_ROOT}/sounds/task-complete.mp3"
-    },
-    "review_complete": {
-      "title": "🔍 Review",
-      "sound": "${CLAUDE_PLUGIN_ROOT}/sounds/review-complete.mp3"
-    },
-    "question": {
-      "title": "❓ Question",
-      "sound": "${CLAUDE_PLUGIN_ROOT}/sounds/question.mp3"
-    },
-    "plan_ready": {
-      "title": "📋 Plan",
-      "sound": "${CLAUDE_PLUGIN_ROOT}/sounds/plan-ready.mp3"
-    },
-    "session_limit_reached": {
-      "title": "⏱️ Session Limit Reached",
-      "sound": "${CLAUDE_PLUGIN_ROOT}/sounds/error.mp3"
-    },
-    "api_error": {
-      "title": "🔴 API Error: 401",
-      "sound": "${CLAUDE_PLUGIN_ROOT}/sounds/error.mp3"
-    },
-    "api_error_overloaded": {
-      "title": "🔴 API Error",
-      "sound": "${CLAUDE_PLUGIN_ROOT}/sounds/error.mp3"
-    }
+  "webhook": {
+    "enabled": false,
+    "url": "",
+    "preset": "lark"
   }
 }
 ```
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `notifyOnSubagentStop` | `false` | Send notifications when subagents (Task tool) complete |
-| `notifyOnTextResponse` | `true` | Send notifications for text-only responses (no tool usage) |
-| `respectJudgeMode` | `true` | Honor `CLAUDE_HOOK_JUDGE_MODE=true` env var to suppress notifications |
-| `suppressQuestionAfterTaskCompleteSeconds` | `12` | Suppress question notifications for N seconds after task complete |
-| `suppressQuestionAfterAnyNotificationSeconds` | `7` | Suppress question notifications for N seconds after any notification |
-| `suppressFilters` | `[]` | Array of rules to suppress notifications by status, git branch, and/or folder. Each rule is an AND of its fields; omitted fields match any value. Set `gitBranch` to `""` to match sessions outside git repos. |
+### Webhook Preset
 
-Each status can be individually disabled by adding `"enabled": false`.
+| Preset | 说明 |
+|--------|------|
+| `slack` | Slack Incoming Webhook |
+| `discord` | Discord Webhook |
+| `lark` | 飞书 / Lark Bot Webhook |
+| `custom` | 自定义 JSON 格式 |
 
-You can also override individual channels per status:
+### 飞书 Webhook 示例
 
 ```json
 {
-  "statuses": {
-    "question": {
-      "title": "❓ Question",
-      "sound": "${CLAUDE_PLUGIN_ROOT}/sounds/question.mp3",
-      "desktop": { "enabled": true },
-      "webhook": { "enabled": false }
-    }
+  "webhook": {
+    "enabled": true,
+    "url": "https://open.larksuite.com/open-apis/bot/v2/hook/your-token",
+    "preset": "lark"
   }
 }
 ```
 
-`statuses.<name>.enabled` is still the master switch for both channels. Use
-`desktop.enabled` and `webhook.enabled` when you want one channel on and the
-other off for the same status.
-
-### Sound Options
-
-**Built-in sounds** (included):
-- `${CLAUDE_PLUGIN_ROOT}/sounds/task-complete.mp3`
-- `${CLAUDE_PLUGIN_ROOT}/sounds/review-complete.mp3`
-- `${CLAUDE_PLUGIN_ROOT}/sounds/question.mp3`
-- `${CLAUDE_PLUGIN_ROOT}/sounds/plan-ready.mp3`
-- `${CLAUDE_PLUGIN_ROOT}/sounds/error.mp3`
-
-**System sounds:**
-- macOS: `/System/Library/Sounds/Glass.aiff`, `/System/Library/Sounds/Hero.aiff`, etc.
-- Linux: `/usr/share/sounds/**/*.ogg` (varies by distribution)
-- Windows: Use built-in MP3s (system sounds not easily accessible)
-
-**Supported formats:** MP3, WAV, FLAC, OGG/Vorbis, AIFF
-
-### List Available Sounds
-
-See all available notification sounds on your system:
+## 调试
 
 ```bash
-# List all sounds (built-in + system)
-bin/list-sounds
-
-# Output as JSON
-bin/list-sounds --json
-
-# Preview a sound
-bin/list-sounds --play task-complete
-
-# Preview at specific volume
-bin/list-sounds --play Glass --volume 0.5
+# 启用 debug 日志手动触发
+KIRO_NOTIFY_DEBUG=1 KIRO_NOTIFICATIONS_ROOT=~/.local/share/kiro-notifications \
+  kiro-notifications handle-hook stop
 ```
 
-Or use the skill command: `/claude-notifications-go:sounds`
-
-### Audio Device Selection
-
-Route notification sounds to a specific audio output device instead of the system default:
+## 卸载
 
 ```bash
-# List available audio devices
-bin/list-devices
-
-# Output:
-#   0: MacBook Pro-Lautsprecher
-#   1: Babyface (23314790) (default)
-#   2: Immersed
+rm -f ~/.local/bin/kiro-notifications
+rm -rf ~/.local/share/kiro-notifications
+# 从 ~/.kiro/agents/default.json 的 hooks.stop 数组中移除 kiro-notifications 条目
 ```
 
-Then add the device name to your `~/.claude/claude-notifications-go/config.json`:
+## 项目结构
 
-```json
-{
-  "notifications": {
-    "desktop": {
-      "audioDevice": "MacBook Pro-Lautsprecher"
-    }
-  }
-}
 ```
-
-Leave `audioDevice` empty or omit it to use the system default device.
-
-### Test Sound Playback
-
-Preview any sound file with optional volume control:
-
-```bash
-# Test built-in sound (full volume)
-bin/sound-preview sounds/task-complete.mp3
-
-# Test with reduced volume (30% - recommended for testing)
-bin/sound-preview --volume 0.3 sounds/task-complete.mp3
-
-# Test macOS system sound at 30% volume
-bin/sound-preview --volume 0.3 /System/Library/Sounds/Glass.aiff
-
-# Test custom sound at 50% volume
-bin/sound-preview --volume 0.5 /path/to/your/sound.wav
-
-# Show all options
-bin/sound-preview --help
+├── cmd/kiro-notifications/   # CLI 入口
+├── config/                   # 默认配置
+├── internal/
+│   ├── analyzer/             # Session 状态分析
+│   ├── config/               # 配置加载
+│   ├── dedup/                # 通知去重
+│   ├── hooks/                # Kiro stop hook 处理
+│   ├── logging/              # 日志
+│   ├── notifier/             # 桌面通知 + 声音播放
+│   ├── summary/              # 消息摘要生成
+│   └── webhook/              # Webhook 发送
+├── pkg/jsonl/                # Kiro session JSONL 解析器
+├── sounds/                   # 通知声音（mp3）
+├── install.sh                # 一键安装
+└── README.md
 ```
-
-**Volume flag:** Use `--volume` to control playback volume (0.0 to 1.0). Default is 1.0 (full volume).
-
-
-## Manual Testing
-
-The plugin is invoked automatically by Claude Code hooks. To test manually:
-
-```bash
-# Test PreToolUse hook
-echo '{"session_id":"test","transcript_path":"/path/to/transcript.jsonl","tool_name":"ExitPlanMode"}' | \
-  claude-notifications handle-hook PreToolUse
-
-# Test Stop hook
-echo '{"session_id":"test","transcript_path":"/path/to/transcript.jsonl"}' | \
-  claude-notifications handle-hook Stop
-```
-
-## Contributing
-
-See **[CONTRIBUTING.md](CONTRIBUTING.md)** for development setup, testing, building, and submitting changes.
-For local plugin workflows and real-`claude` smoke/manual E2E testing, see **[docs/LOCAL_DEVELOPMENT.md](docs/LOCAL_DEVELOPMENT.md)**.
-
-## Troubleshooting
-
-See **[Troubleshooting Guide](docs/troubleshooting.md)** for common issues:
-
-- **Ubuntu 24.04**: `EXDEV: cross-device link not permitted` during `/plugin install` (TMPDIR workaround)
-- **Windows**: install issues related to `%TEMP%` / `%TMP%` location
-- **Windows / Git Bash**: GitHub Releases download fails because of proxy / TLS inspection / certificate revocation
-
-## Documentation
-
-- **[Architecture](docs/ARCHITECTURE.md)** - Plugin architecture, directory structure, data flow
-
-- **[Local Development And E2E](docs/LOCAL_DEVELOPMENT.md)** - Local marketplace testing, real Claude smoke tests, manual click-to-focus validation
-
-- **[Click-to-Focus](docs/CLICK_TO_FOCUS.md)** - Configuration, supported terminals, platform details
-
-- **[Volume Control Guide](docs/volume-control.md)** - Customize notification volume
-  - Configure volume from 0% to 100%
-  - Logarithmic scaling for natural sound
-  - Per-environment recommendations
-
-- **[Interactive Sound Preview](docs/interactive-sound-preview.md)** - Preview sounds during setup
-  - Interactive sound selection
-  - Preview before choosing
-
-- **[Plugin Compatibility](docs/PLUGIN_COMPATIBILITY.md)** - Integration with other Claude Code plugins
-
-- **[Troubleshooting](docs/troubleshooting.md)** - Common install/runtime issues
-  - Ubuntu 24.04 `EXDEV` during `/plugin install` (TMPDIR workaround)
-
-- **[Webhook Integration Guide](docs/webhooks/README.md)** - Complete guide for webhook setup
-  - **[Slack](docs/webhooks/slack.md)** - Slack integration with color-coded attachments
-  - **[Discord](docs/webhooks/discord.md)** - Discord integration with rich embeds
-  - **[Telegram](docs/webhooks/telegram.md)** - Telegram bot integration
-  - **[Lark/Feishu](docs/webhooks/lark.md)** - Lark/Feishu integration with interactive cards
-  - **[Custom Webhooks](docs/webhooks/custom.md)** - Any webhook-compatible service
-  - **[Configuration](docs/webhooks/configuration.md)** - Retry, circuit breaker, rate limiting
-  - **[Monitoring](docs/webhooks/monitoring.md)** - Metrics and debugging
-  - **[Troubleshooting](docs/webhooks/troubleshooting.md)** - Common issues and solutions
 
 ## License
 
-GPL-3.0 - See [LICENSE](LICENSE) file for details.
+MIT
