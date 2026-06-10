@@ -5,7 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 INSTALL_DIR="${HOME}/.local/share/kiro-notifications"
 BIN_DIR="${HOME}/.local/bin"
 AGENT_DIR="${HOME}/.kiro/agents"
-AGENT_FILE="${AGENT_DIR}/default.json"
+
+DEFAULT_TOOLS='["read", "write", "shell", "grep", "glob", "code", "web_search", "web_fetch", "use_aws", "knowledge", "subagent", "todo_list", "introspect"]'
 
 echo "=== Kiro Notifications 安装 ==="
 
@@ -21,14 +22,13 @@ echo "→ 编译 kiro-notifications..."
 cd "$SCRIPT_DIR"
 go build -o kiro-notifications ./cmd/kiro-notifications/
 
-# 安装二进制
+# 安装二进制和资源
 mkdir -p "$BIN_DIR" "$INSTALL_DIR/sounds" "$INSTALL_DIR/config"
 cp kiro-notifications "$BIN_DIR/"
 chmod +x "$BIN_DIR/kiro-notifications"
-
-# 安装资源
 cp sounds/*.mp3 "$INSTALL_DIR/sounds/" 2>/dev/null || true
 cp config/config.json "$INSTALL_DIR/config/"
+rm -f "$SCRIPT_DIR/kiro-notifications"
 echo "✓ 已安装到 ${BIN_DIR}/kiro-notifications"
 
 # 检查 PATH
@@ -37,44 +37,81 @@ if [[ ":$PATH:" != *":${BIN_DIR}:"* ]]; then
     echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
 fi
 
-# 配置 Kiro agent hook
+# === Agent 配置 ===
 mkdir -p "$AGENT_DIR"
-HOOK_CMD="${BIN_DIR}/kiro-notifications handle-hook stop"
 
-if [ -f "$AGENT_FILE" ]; then
-    if grep -q "kiro-notifications" "$AGENT_FILE" 2>/dev/null; then
-        echo "✓ Kiro hook 已配置，跳过"
-    else
-        python3 -c "
+# 列出已有 agent
+agents=()
+for f in "$AGENT_DIR"/*.json; do
+    [ -f "$f" ] && agents+=("$f")
+done
+
+echo ""
+echo "请选择要配置 hook 的 Kiro Agent："
+echo ""
+i=1
+for f in "${agents[@]}"; do
+    name=$(python3 -c "import json; print(json.load(open('$f')).get('name','unknown'))" 2>/dev/null)
+    echo "  $i) $name ($(basename $f))"
+    ((i++))
+done
+echo "  $i) 新建 agent"
+echo ""
+read -p "请输入编号 [1]: " choice
+choice=${choice:-1}
+
+if [ "$choice" -eq "$i" ] 2>/dev/null; then
+    read -p "Agent 名称 [default]: " agent_name
+    agent_name=${agent_name:-default}
+    AGENT_FILE="${AGENT_DIR}/${agent_name}.json"
+    python3 -c "
+import json
+cfg = {
+    'name': '$agent_name',
+    'tools': $DEFAULT_TOOLS,
+    'allowedTools': ['@builtin'],
+    'toolsSettings': {'shell': {'autoAllowReadonly': True}},
+    'hooks': {}
+}
+with open('$AGENT_FILE', 'w') as f:
+    json.dump(cfg, f, indent=2, ensure_ascii=False)
+"
+    echo "✓ 已创建 agent: $AGENT_FILE"
+elif [ "$choice" -ge 1 ] 2>/dev/null && [ "$choice" -le "${#agents[@]}" ] 2>/dev/null; then
+    AGENT_FILE="${agents[$((choice-1))]}"
+else
+    echo "无效选择"
+    exit 1
+fi
+
+# 确保 agent 有 tools 字段
+python3 -c "
 import json
 with open('$AGENT_FILE') as f:
     cfg = json.load(f)
-hook = {'command': '$HOOK_CMD', 'timeout_ms': 30000}
-cfg.setdefault('hooks', {}).setdefault('stop', []).append(hook)
+if 'tools' not in cfg:
+    cfg['tools'] = $DEFAULT_TOOLS
+    with open('$AGENT_FILE', 'w') as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
+    print('✓ 已为 agent 补充 tools 字段')
+"
+
+# 添加 stop hook
+HOOK_CMD="${BIN_DIR}/kiro-notifications handle-hook stop &"
+python3 -c "
+import json
+with open('$AGENT_FILE') as f:
+    cfg = json.load(f)
+hooks = cfg.setdefault('hooks', {}).setdefault('stop', [])
+for h in hooks:
+    if 'kiro-notifications' in h.get('command', ''):
+        print('✓ Hook 已存在，跳过')
+        exit(0)
+hooks.append({'command': '$HOOK_CMD', 'timeout_ms': 5000})
 with open('$AGENT_FILE', 'w') as f:
     json.dump(cfg, f, indent=2, ensure_ascii=False)
-" && echo "✓ 已添加 stop hook 到 ${AGENT_FILE}"
-    fi
-else
-    cat > "$AGENT_FILE" <<EOF
-{
-  "name": "default",
-  "allowedTools": ["@builtin"],
-  "hooks": {
-    "stop": [
-      {
-        "command": "${HOOK_CMD}",
-        "timeout_ms": 30000
-      }
-    ]
-  }
-}
-EOF
-    echo "✓ 已创建 ${AGENT_FILE}"
-fi
-
-# 清理编译产物
-rm -f "$SCRIPT_DIR/kiro-notifications"
+print('✓ 已添加 stop hook 到 ' + '$AGENT_FILE')
+"
 
 echo ""
 echo "=== 安装完成 ==="
@@ -83,5 +120,3 @@ echo ""
 echo "配置文件: ${INSTALL_DIR}/config/config.json"
 echo "  - 修改 webhook.enabled=true 和 webhook.url 启用 webhook"
 echo "  - 支持 preset: slack / discord / lark / custom"
-echo ""
-echo "设置环境变量 KIRO_NOTIFICATIONS_ROOT=${INSTALL_DIR} 以使用安装目录的资源"
