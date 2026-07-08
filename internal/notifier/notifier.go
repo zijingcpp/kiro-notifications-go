@@ -13,7 +13,9 @@ import (
 // Send sends a desktop notification.
 func Send(title, body string, cfg *config.Config) error {
 	logging.Debug("notify: %s / %s", title, body)
-	return beeep.Notify(title, body, "")
+	// Use a stock icon name; empty string causes notify-send to crash
+	// with SIGTRAP in g_variant_new_string() on Ubuntu 24.04.
+	return beeep.Notify(title, body, "dialog-information")
 }
 
 // PlaySound plays an audio file asynchronously.

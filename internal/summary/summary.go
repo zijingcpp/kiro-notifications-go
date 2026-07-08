@@ -27,8 +27,11 @@ func Generate(msgs []jsonl.Message) string {
 	// Clean up markdown
 	text = cleanMarkdown(text)
 
-	if len(text) > maxLen {
-		text = text[:maxLen] + "..."
+	// Truncate by rune count to avoid splitting multi-byte UTF-8 characters,
+	// which causes notify-send to crash with SIGTRAP in g_variant_new_string().
+	runes := []rune(text)
+	if len(runes) > maxLen {
+		text = string(runes[:maxLen]) + "..."
 	}
 	return text
 }
