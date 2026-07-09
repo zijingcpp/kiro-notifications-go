@@ -27,7 +27,7 @@ jobs:
             platform: darwin
             arch: arm64
             binary: kiro-notifications-darwin-arm64
-          - os: macos-13
+          - os: ubuntu-latest
             platform: darwin
             arch: amd64
             binary: kiro-notifications-darwin-amd64
@@ -42,9 +42,10 @@ jobs:
       - name: Build
         run: |
           mkdir -p dist
-          CGO_ENABLED=0 go build -ldflags="-s -w" -trimpath -o dist/${{ matrix.binary }} ./cmd/kiro-notifications
+          GOOS=${{ matrix.platform }} GOARCH=${{ matrix.arch }} CGO_ENABLED=0 go build -ldflags="-s -w" -trimpath -o dist/${{ matrix.binary }} ./cmd/kiro-notifications
 
       - name: Test binary
+        if: matrix.platform != 'darwin' || runner.os == 'macOS'
         run: ./dist/${{ matrix.binary }} version
 
       - uses: actions/upload-artifact@v4
